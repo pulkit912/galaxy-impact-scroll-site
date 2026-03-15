@@ -1,30 +1,26 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useScroll, useTransform, useSpring } from 'framer-motion'
 
 const TOTAL_FRAMES = 60
+
+// Clamp helper
+function clamp(v: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, v))
+}
 
 export default function CanvasSequence() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const imagesRef = useRef<HTMLImageElement[]>([])
   const [loaded, setLoaded] = useState(0)
-  const rafRef = useRef<number>(0)
-  const dprRef = useRef<number>(1)
 
-  const { scrollYProgress } = useScroll()
+  // Render state kept in refs - never cause re-renders
+  const currentFrameRef = useRef(0)   // smoothed float frame position
+  const targetFrameRef  = useRef(0)   // raw target from scroll
+  const rafRef          = useRef(0)
+  const dprRef          = useRef(1)
 
-  // Ultra-smooth spring physics
-  const smoothProgress = useSpring(scrollYProgress, {
-    stiffness: 60,
-    damping: 20,
-    mass: 0.3,
-    restDelta: 0.0001,
-  })
-
-  const frameIndex = useTransform(smoothProgress, [0, 1], [0, TOTAL_FRAMES - 1])
-
-  // ── Preload all frames eagerly ────────────────────────────────────────────
+  // ── Preload all frames eagerly ─────────────────────────────────────────────
   useEffect(() => {
     let count = 0
     const imgs: HTMLImageElement[] = new Array(TOTAL_FRAMES)
@@ -46,30 +42,45 @@ export default function CanvasSequence() {
     }
   }, [])
 
-  // ── Canvas resize with DPR ────────────────────────────────────────────────
+  // ── Canvas resize with DPR capped at 2 ────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
 
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1
+      // Cap DPR at 2 to avoid GPU memory OOM on high-DPR phones
+      const dpr = Math.min(window.devicePixelRatio || 1, 2)
       dprRef.current = dpr
-      canvas.width = Math.round(window.innerWidth * dpr)
+      canvas.width  = Math.round(window.innerWidth  * dpr)
       canvas.height = Math.round(window.innerHeight * dpr)
       const ctx = canvas.getContext('2d')
       if (ctx) {
-        // setTransform is ABSOLUTE — avoids compounding scale on every resize
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       }
     }
 
     resize()
-    window.addEventListener('resize', resize)
+    window.addEventListener('resize', resize, { passive: true })
     return () => window.removeEventListener('resize', resize)
   }, [])
 
-  // ── Render loop: smooth cross-dissolve between adjacent frames ───────────
+  // ── Native scroll listener → update targetFrame ───────────────────────────
   useEffect(() => {
+    const onScroll = () => {
+      const docH   = document.documentElement.scrollHeight - window.innerHeight
+      const prog   = docH > 0 ? clamp(window.scrollY / docH, 0, 1) : 0
+      targetFrameRef.current = prog * (TOTAL_FRAMES - 1)
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true })
+    onScroll() // init on mount
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
+  // ── rAF render loop: lerp currentFrame → target, then draw ───────────────
+  useEffect(() => {
+    const isMobile = () => window.innerWidth < 768
+
     const render = () => {
       const canvas = canvasRef.current
       if (!canvas) return
@@ -79,26 +90,26 @@ export default function CanvasSequence() {
       const ctx = canvas.getContext('2d')
       if (!ctx) return
 
-      // Always enforce HQ smoothing — context state can be lost
-      ctx.imageSmoothingEnabled = true
-      ctx.imageSmoothingQuality = 'high'
+      // Lerp speed: faster on mobile so it feels responsive
+      const lerpFactor = isMobile() ? 0.18 : 0.12
+      currentFrameRef.current += (targetFrameRef.current - currentFrameRef.current) * lerpFactor
 
-      // Raw float frame position — e.g. 12.73
-      const rawIdx = Math.max(0, Math.min(TOTAL_FRAMES - 1, frameIndex.get()))
-
-      const floorIdx = Math.floor(rawIdx)                          // frame A
-      const ceilIdx  = Math.min(TOTAL_FRAMES - 1, floorIdx + 1)   // frame B
-      const blend    = rawIdx - floorIdx                           // 0..1 how much of B to show
+      const rawIdx   = clamp(currentFrameRef.current, 0, TOTAL_FRAMES - 1)
+      const floorIdx = Math.floor(rawIdx)
+      const ceilIdx  = Math.min(TOTAL_FRAMES - 1, floorIdx + 1)
+      const blend    = rawIdx - floorIdx
 
       const imgA = imgs[floorIdx]
       const imgB = imgs[ceilIdx]
       if (!imgA) return
 
+      ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = 'high'
+
       const cw = window.innerWidth
       const ch = window.innerHeight
 
-      // Dynamic zoom: slight zoom-out base (0.85) + sine curve peaks at midpoint
-      // Lower base = more of the image visible = sharper appearance
+      // Subtle zoom arc keeps the image feeling dynamic
       const progress = rawIdx / (TOTAL_FRAMES - 1)
       const zoom = 0.85 + Math.sin(progress * Math.PI) * 0.15
 
@@ -114,15 +125,14 @@ export default function CanvasSequence() {
 
       ctx.clearRect(0, 0, cw, ch)
 
-      // Apply brightness/contrast filter to darken background for text readability
+      // Darken for text readability
       ctx.filter = 'brightness(0.55) contrast(1.1)'
 
-      // Draw frame A at full opacity
       const a = drawParams(imgA)
       ctx.globalAlpha = 1
       ctx.drawImage(imgA, a.dx, a.dy, a.dw, a.dh)
 
-      // Cross-dissolve: draw frame B over A at blend opacity
+      // Cross-dissolve to next frame
       if (blend > 0 && imgB) {
         const b = drawParams(imgB)
         ctx.globalAlpha = blend
@@ -130,7 +140,6 @@ export default function CanvasSequence() {
         ctx.globalAlpha = 1
       }
 
-      // Reset filter so nothing else is affected
       ctx.filter = 'none'
     }
 
@@ -141,14 +150,13 @@ export default function CanvasSequence() {
 
     rafRef.current = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(rafRef.current)
-  }, [frameIndex])
+  }, [])
 
   const pct = Math.round((loaded / TOTAL_FRAMES) * 100)
   const isLoading = loaded < TOTAL_FRAMES
 
   return (
     <>
-      {/* Fixed canvas always behind everything */}
       <canvas
         ref={canvasRef}
         style={{
@@ -158,6 +166,8 @@ export default function CanvasSequence() {
           height: '100vh',
           display: 'block',
           zIndex: 0,
+          // Let the browser know we only need vertical scrolling - don't hijack touch
+          touchAction: 'pan-y',
         }}
       />
 
@@ -176,21 +186,28 @@ export default function CanvasSequence() {
             gap: '1.5rem',
           }}
         >
-          {/* Progress bar */}
-          <div style={{ width: '180px', height: '2px', background: 'rgba(255,255,255,0.15)', borderRadius: '99px', overflow: 'hidden' }}>
-            <div
-              style={{
-                height: '100%',
-                width: `${pct}%`,
-                background: 'white',
-                borderRadius: '99px',
-                transition: 'width 0.3s ease',
-              }}
-            />
+          {/* Animated ring */}
+          <div style={{ position: 'relative', width: '56px', height: '56px' }}>
+            <svg viewBox="0 0 56 56" style={{ position: 'absolute', inset: 0, animation: 'spin 1.4s linear infinite' }}>
+              <circle cx="28" cy="28" r="24" fill="none" stroke="rgba(255,140,60,0.15)" strokeWidth="3" />
+              <circle cx="28" cy="28" r="24" fill="none" stroke="rgba(255,140,60,0.9)" strokeWidth="3"
+                strokeDasharray={`${(pct / 100) * 150.8} 150.8`}
+                strokeLinecap="round"
+                strokeDashoffset="0"
+                transform="rotate(-90 28 28)"
+              />
+            </svg>
+            <span style={{
+              position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'rgba(255,140,60,0.9)', fontFamily: 'Inter, sans-serif', fontSize: '11px', fontWeight: 700,
+            }}>
+              {pct}
+            </span>
           </div>
-          <p style={{ color: 'rgba(255,255,255,0.5)', fontFamily: 'sans-serif', fontSize: '13px', letterSpacing: '0.2em', textTransform: 'uppercase' }}>
-            {pct}%
+          <p style={{ color: 'rgba(255,255,255,0.35)', fontFamily: 'Inter, sans-serif', fontSize: '11px', letterSpacing: '0.25em', textTransform: 'uppercase' }}>
+            Loading
           </p>
+          <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
         </div>
       )}
     </>

@@ -2,12 +2,17 @@ import CanvasSequence from '@/components/CanvasSequence'
 import Navbar from '@/components/Navbar'
 import HeroSection from '@/components/HeroSection'
 import CinematicSections from '@/components/CinematicSections'
+import ParallaxTextOverlay from '@/components/ParallaxTextOverlay'
+import ProjectGrid from '@/components/ProjectGrid'
 
 export default function Home() {
   return (
     <>
       {/* ── Fixed background canvas (z 0) ─────────────────────────────────── */}
       <CanvasSequence />
+
+      {/* ── Parallax text badges (z 8) ────────────────────────────────────── */}
+      <ParallaxTextOverlay />
 
       {/* ── Vignette layers (z 1) ─────────────────────────────────────────── */}
       {/* Radial dark edges */}
@@ -34,6 +39,9 @@ export default function Home() {
         <HeroSection />
 
         <CinematicSections />
+
+        {/* ── Project Grid ──────────────────────────────────────────────────── */}
+        <ProjectGrid />
 
         {/* ── Ad slot ──────────────────────────────────────────────────────── */}
         <section className="py-8 sm:py-10 px-4 sm:px-6 flex justify-center">

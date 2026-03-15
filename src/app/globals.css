@@ -22,14 +22,23 @@ html {
 body {
   color: var(--foreground);
   background: var(--background);
-  /* Bebas Neue for dramatic headings (applied via className), Inter for body */
   font-family: 'Inter', Arial, Helvetica, sans-serif;
   overflow-x: hidden;
-  /* Prevent iOS font scaling on orientation change */
+  /* iOS font scaling prevention */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
-  /* Smooth touch scrolling on iOS */
-  -webkit-overflow-scrolling: touch;
+  /* Stop iOS rubber-band bounce from compounding with our animations */
+  overscroll-behavior: none;
+}
+
+/* Let canvas pass finger events through to the scroll container */
+canvas {
+  touch-action: pan-y;
+}
+
+/* GPU-accelerated parallax elements */
+.will-parallax {
+  will-change: transform, opacity;
 }
 
 /* Remove tap highlight on mobile */
@@ -37,7 +46,7 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Make h1/h2/h3 use Bebas Neue by default */
+/* Make h1/h2/h3/h4 use Bebas Neue */
 h1, h2, h3, h4 {
   font-family: 'Bebas Neue', 'Inter', Arial, sans-serif;
   letter-spacing: 0.03em;
